@@ -16,6 +16,7 @@ typedef struct hfs_winfsp_context {
 
 typedef struct hfs_winfsp_file_context {
     hfs_dirent_t dirent;
+    PVOID dir_buffer;
 } hfs_winfsp_file_context_t;
 
 /* Initialize WinFsp interface and mount HFS+ filesystem */
