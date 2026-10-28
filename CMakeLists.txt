@@ -27,6 +27,7 @@ set(CORE_SOURCES
     src/core/btree.c
     src/core/catalog.c
     src/core/extents.c
+    src/core/diag.c
 )
 
 add_library(hfsplus_core STATIC ${CORE_SOURCES})
