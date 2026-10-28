@@ -46,13 +46,12 @@ jobs:
           if (Test-Path "C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll") {
             Copy-Item "C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll" dist/
           }
-          Compress-Archive -Path dist/* -DestinationPath hfsplus-windows-x64.zip
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hfsplus-windows-x64
-          path: hfsplus-windows-x64.zip
+          path: dist/
 
   build-macos:
     name: Build & Test on macOS (Apple Silicon & Clang)
