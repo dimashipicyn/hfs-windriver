@@ -48,6 +48,8 @@ static void fill_file_info(const hfs_volume_t* vol, const hfs_dirent_t* ent, FSP
 
 static NTSTATUS GetVolumeInfo(FSP_FILE_SYSTEM* FileSystem, FSP_FSCTL_VOLUME_INFO* VolumeInfo) {
     hfs_winfsp_context_t* ctx = (hfs_winfsp_context_t*)FileSystem->UserContext;
+    EnterCriticalSection(&ctx->lock);
+
     const hfs_volume_t* vol = ctx->vol;
 
     VolumeInfo->TotalSize = (UINT64)vol->total_blocks * (UINT64)vol->block_size;
@@ -55,7 +57,9 @@ static NTSTATUS GetVolumeInfo(FSP_FILE_SYSTEM* FileSystem, FSP_FSCTL_VOLUME_INFO
 
     const wchar_t* label = vol->is_hfsx ? L"Mac HFSX" : L"Mac HFS+";
     wcsncpy_s(VolumeInfo->VolumeLabel, sizeof(VolumeInfo->VolumeLabel)/sizeof(wchar_t), label, _TRUNCATE);
+    VolumeInfo->VolumeLabelLength = (UINT16)(wcslen(VolumeInfo->VolumeLabel) * sizeof(wchar_t));
 
+    LeaveCriticalSection(&ctx->lock);
     return STATUS_SUCCESS;
 }
 
@@ -69,8 +73,11 @@ static NTSTATUS GetSecurityByName(FSP_FILE_SYSTEM* FileSystem, PWSTR FileName,
     char utf8_path[1024];
     convert_wchar_to_utf8(FileName, utf8_path, sizeof(utf8_path));
 
+    EnterCriticalSection(&ctx->lock);
+
     hfs_dirent_t ent;
     if (hfs_catalog_lookup_path(ctx->cat, utf8_path, &ent) != 0) {
+        LeaveCriticalSection(&ctx->lock);
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
 
@@ -87,11 +94,13 @@ static NTSTATUS GetSecurityByName(FSP_FILE_SYSTEM* FileSystem, PWSTR FileName,
             memcpy(SecurityDescriptor, g_default_sd, g_default_sd_size);
         } else if (SecurityDescriptor) {
             *PSecurityDescriptorSize = g_default_sd_size;
+            LeaveCriticalSection(&ctx->lock);
             return STATUS_BUFFER_TOO_SMALL;
         }
         *PSecurityDescriptorSize = g_default_sd_size;
     }
 
+    LeaveCriticalSection(&ctx->lock);
     return STATUS_SUCCESS;
 }
 
@@ -124,13 +133,17 @@ static NTSTATUS Open(FSP_FILE_SYSTEM* FileSystem, PWSTR FileName, UINT32 CreateO
     char utf8_path[1024];
     convert_wchar_to_utf8(FileName, utf8_path, sizeof(utf8_path));
 
+    EnterCriticalSection(&ctx->lock);
+
     hfs_dirent_t ent;
     if (hfs_catalog_lookup_path(ctx->cat, utf8_path, &ent) != 0) {
+        LeaveCriticalSection(&ctx->lock);
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
 
     hfs_winfsp_file_context_t* fctx = (hfs_winfsp_file_context_t*)hfs_zalloc(sizeof(hfs_winfsp_file_context_t));
     if (!fctx) {
+        LeaveCriticalSection(&ctx->lock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -138,7 +151,8 @@ static NTSTATUS Open(FSP_FILE_SYSTEM* FileSystem, PWSTR FileName, UINT32 CreateO
     fill_file_info(ctx->vol, &fctx->dirent, FileInfo);
     *PFileContext = fctx;
 
-    wprintf(L"[HFS+] Open: %ls (CNID=%u, %ls)\n", FileName, ent.cnid, ent.is_directory ? L"DIR" : L"FILE");
+    printf("[HFS+] Open: %s (CNID=%u, %s)\n", utf8_path, ent.cnid, ent.is_directory ? "DIR" : "FILE");
+    LeaveCriticalSection(&ctx->lock);
     return STATUS_SUCCESS;
 }
 
@@ -171,7 +185,11 @@ static NTSTATUS Read(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext, PVOID Buffe
         Length = (UINT32)(fctx->dirent.size - Offset);
     }
 
-    if (hfs_fork_read(ctx->vol, &fctx->dirent.data_fork, Offset, Buffer, Length) != 0) {
+    EnterCriticalSection(&ctx->lock);
+    int res = hfs_fork_read(ctx->vol, &fctx->dirent.data_fork, Offset, Buffer, Length);
+    LeaveCriticalSection(&ctx->lock);
+
+    if (res != 0) {
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -183,7 +201,51 @@ static NTSTATUS GetFileInfo(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext, FSP_
     hfs_winfsp_context_t* ctx = (hfs_winfsp_context_t*)FileSystem->UserContext;
     hfs_winfsp_file_context_t* fctx = (hfs_winfsp_file_context_t*)FileContext;
 
+    EnterCriticalSection(&ctx->lock);
     fill_file_info(ctx->vol, &fctx->dirent, FileInfo);
+    LeaveCriticalSection(&ctx->lock);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS GetDirInfoByName(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext,
+                                 PWSTR FileName, FSP_FSCTL_DIR_INFO* DirInfo) {
+    hfs_winfsp_context_t* ctx = (hfs_winfsp_context_t*)FileSystem->UserContext;
+    hfs_winfsp_file_context_t* fctx = (hfs_winfsp_file_context_t*)FileContext;
+
+    if (!fctx->dirent.is_directory) {
+        return STATUS_NOT_A_DIRECTORY;
+    }
+
+    if (!FileName || !FileName[0]) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    EnterCriticalSection(&ctx->lock);
+
+    /* Handle "." */
+    if (wcscmp(FileName, L".") == 0) {
+        fill_file_info(ctx->vol, &fctx->dirent, &DirInfo->FileInfo);
+        DirInfo->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + 1 * sizeof(wchar_t));
+        DirInfo->FileNameBuf[0] = L'.';
+        LeaveCriticalSection(&ctx->lock);
+        return STATUS_SUCCESS;
+    }
+
+    char utf8_name[256];
+    convert_wchar_to_utf8(FileName, utf8_name, sizeof(utf8_name));
+
+    hfs_dirent_t ent;
+    if (hfs_catalog_lookup(ctx->cat, fctx->dirent.cnid, utf8_name, &ent) != 0) {
+        LeaveCriticalSection(&ctx->lock);
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    fill_file_info(ctx->vol, &ent, &DirInfo->FileInfo);
+    size_t name_len = wcslen(FileName);
+    DirInfo->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + name_len * sizeof(wchar_t));
+    memcpy(DirInfo->FileNameBuf, FileName, name_len * sizeof(wchar_t));
+
+    LeaveCriticalSection(&ctx->lock);
     return STATUS_SUCCESS;
 }
 
@@ -191,15 +253,29 @@ typedef struct {
     PVOID* pdir_buffer;
     const hfs_volume_t* vol;
     int count;
+    NTSTATUS result;
 } dir_fill_ctx_t;
 
 static int on_winfsp_dir_entry(const hfs_dirent_t* entry, void* user_data) {
     dir_fill_ctx_t* dctx = (dir_fill_ctx_t*)user_data;
 
+    if (!entry->name[0]) {
+        return 0; /* Skip entries without name */
+    }
+
     wchar_t wname[256];
     MultiByteToWideChar(CP_UTF8, 0, entry->name, -1, wname, 256);
     size_t name_len = wcslen(wname);
     if (name_len == 0) return 0;
+
+    /* Sanitize illegal Windows filename characters and control characters */
+    for (size_t i = 0; i < name_len; i++) {
+        if (wname[i] < 32 || wname[i] == L':' || wname[i] == L'/' || wname[i] == L'\\' ||
+            wname[i] == L'*' || wname[i] == L'?' || wname[i] == L'\"' ||
+            wname[i] == L'<' || wname[i] == L'>' || wname[i] == L'|') {
+            wname[i] = L'_';
+        }
+    }
 
     UINT8 dir_info_buf[sizeof(FSP_FSCTL_DIR_INFO) + sizeof(wname)];
     FSP_FSCTL_DIR_INFO* dir_info = (FSP_FSCTL_DIR_INFO*)dir_info_buf;
@@ -212,10 +288,11 @@ static int on_winfsp_dir_entry(const hfs_dirent_t* entry, void* user_data) {
 
     NTSTATUS result = STATUS_SUCCESS;
     if (!FspFileSystemFillDirectoryBuffer(dctx->pdir_buffer, dir_info, &result)) {
+        dctx->result = result;
         return 1; /* Buffer full or error */
     }
 
-    wprintf(L"  [+] %ls (%ls, size=%llu)\n", wname, entry->is_directory ? L"DIR" : L"FILE", (unsigned long long)entry->size);
+    printf("  [+] %s (%s, size=%llu)\n", entry->name, entry->is_directory ? "DIR" : "FILE", (unsigned long long)entry->size);
     dctx->count++;
     return 0;
 }
@@ -231,6 +308,8 @@ static NTSTATUS ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext,
     if (!fctx->dirent.is_directory) {
         return STATUS_NOT_A_DIRECTORY;
     }
+
+    EnterCriticalSection(&ctx->lock);
 
     NTSTATUS dir_result = STATUS_SUCCESS;
     if (FspFileSystemAcquireDirectoryBuffer(&fctx->dir_buffer, 0 == Marker, &dir_result)) {
@@ -261,18 +340,21 @@ static NTSTATUS ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext,
             .pdir_buffer = &fctx->dir_buffer,
             .vol = ctx->vol,
             .count = 0,
+            .result = STATUS_SUCCESS,
         };
         hfs_catalog_iterate_dir(ctx->cat, fctx->dirent.cnid, on_winfsp_dir_entry, &dctx);
 
-        wprintf(L"[HFS+] ReadDirectory: CNID=%u, entries listed: %d\n", fctx->dirent.cnid, dctx.count);
+        printf("[HFS+] ReadDirectory: CNID=%u, entries listed: %d\n", fctx->dirent.cnid, dctx.count);
         FspFileSystemReleaseDirectoryBuffer(&fctx->dir_buffer);
     }
 
     if (!NT_SUCCESS(dir_result)) {
+        LeaveCriticalSection(&ctx->lock);
         return dir_result;
     }
 
     FspFileSystemReadDirectoryBuffer(&fctx->dir_buffer, Marker, Buffer, (ULONG)Length, (PULONG)PBytesTransferred);
+    LeaveCriticalSection(&ctx->lock);
     return STATUS_SUCCESS;
 }
 
@@ -285,6 +367,7 @@ static const FSP_FILE_SYSTEM_INTERFACE g_hfs_interface = {
     .Read = Read,
     .GetFileInfo = GetFileInfo,
     .ReadDirectory = ReadDirectory,
+    .GetDirInfoByName = GetDirInfoByName,
 };
 
 static HANDLE g_stop_event = NULL;
@@ -348,6 +431,7 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     ctx->dev = dev;
     ctx->vol = vol;
     ctx->cat = cat;
+    InitializeCriticalSection(&ctx->lock);
 
     FSP_FSCTL_VOLUME_PARAMS params;
     memset(&params, 0, sizeof(params));
@@ -359,6 +443,7 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     params.ReadOnlyVolume = 1;
     params.CasePreservedNames = 1;
     params.UnicodeOnDisk = 1;
+    wcsncpy_s(params.FileSystemName, sizeof(params.FileSystemName)/sizeof(wchar_t), L"HFS+", _TRUNCATE);
 
     /* Ensure the WinFsp kernel driver service is started if possible */
     FspFsctlStartService();
@@ -375,6 +460,7 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
             fwprintf(stderr, L"    2. You can check WinFsp driver status with:\n");
             fwprintf(stderr, L"           \"C:\\Program Files (x86)\\WinFsp\\bin\\fsptool-x64.exe\" lsdrv\n");
         }
+        DeleteCriticalSection(&ctx->lock);
         hfs_free(ctx);
         hfs_catalog_close(cat);
         hfs_volume_close(vol);
@@ -388,6 +474,7 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     if (!NT_SUCCESS(status)) {
         fwprintf(stderr, L"FspFileSystemSetMountPoint failed with status 0x%08X\n", (unsigned int)status);
         FspFileSystemDelete(ctx->fsp);
+        DeleteCriticalSection(&ctx->lock);
         hfs_free(ctx);
         hfs_catalog_close(cat);
         hfs_volume_close(vol);
@@ -395,10 +482,11 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
         return -1;
     }
 
-    status = FspFileSystemStartDispatcher(ctx->fsp, 0);
+    status = FspFileSystemStartDispatcher(ctx->fsp, 1);
     if (!NT_SUCCESS(status)) {
         fwprintf(stderr, L"FspFileSystemStartDispatcher failed with status 0x%08X\n", (unsigned int)status);
         FspFileSystemDelete(ctx->fsp);
+        DeleteCriticalSection(&ctx->lock);
         hfs_free(ctx);
         hfs_catalog_close(cat);
         hfs_volume_close(vol);
@@ -425,6 +513,7 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     hfs_catalog_close(cat);
     hfs_volume_close(vol);
     hfs_block_device_close(dev);
+    DeleteCriticalSection(&ctx->lock);
     hfs_free(ctx);
 
     if (h_thread) {

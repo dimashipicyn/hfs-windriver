@@ -12,6 +12,7 @@ typedef struct hfs_winfsp_context {
     hfs_volume_t* vol;
     hfs_catalog_t* cat;
     FSP_FILE_SYSTEM* fsp;
+    CRITICAL_SECTION lock;
 } hfs_winfsp_context_t;
 
 typedef struct hfs_winfsp_file_context {

@@ -145,22 +145,28 @@ int hfs_catalog_lookup_path(hfs_catalog_t* cat, const char* path, hfs_dirent_t* 
 int hfs_catalog_iterate_dir(hfs_catalog_t* cat, uint32_t folder_cnid, hfs_dir_callback_fn callback, void* user_data) {
     if (!cat || !cat->btree || !callback) return -1;
 
-    /* A folder thread record in Catalog has parentID = folder_cnid, nodeName.length = 0 */
-    HFSPlusCatalogKey search_key;
-    memset(&search_key, 0, sizeof(search_key));
-    search_key.parentID = cpu_to_be32(folder_cnid);
-    search_key.nodeName.length = 0;
-    search_key.keyLength = cpu_to_be16((uint16_t)(sizeof(uint32_t) + sizeof(uint16_t)));
-
     uint32_t leaf_node = 0;
     uint16_t record_idx = 0;
 
-    /* Search for start of records with this parentID */
-    hfs_btree_search(cat->btree, &search_key, NULL, NULL, NULL, &leaf_node, &record_idx);
-    if (leaf_node == 0) {
-        /* Fallback: start from first leaf node */
+    if (folder_cnid == kHFSRootFolderID) {
+        /* Root folder (CNID=2) children always start in the very first leaf node */
         leaf_node = cat->btree->header.firstLeafNode;
         record_idx = 0;
+    } else {
+        /* A folder thread record in Catalog has parentID = folder_cnid, nodeName.length = 0 */
+        HFSPlusCatalogKey search_key;
+        memset(&search_key, 0, sizeof(search_key));
+        search_key.parentID = cpu_to_be32(folder_cnid);
+        search_key.nodeName.length = 0;
+        search_key.keyLength = cpu_to_be16((uint16_t)(sizeof(uint32_t) + sizeof(uint16_t)));
+
+        /* Search for start of records with this parentID */
+        hfs_btree_search(cat->btree, &search_key, NULL, NULL, NULL, &leaf_node, &record_idx);
+        if (leaf_node == 0) {
+            /* Fallback: start from first leaf node */
+            leaf_node = cat->btree->header.firstLeafNode;
+            record_idx = 0;
+        }
     }
 
     uint8_t* node_buf = cat->btree->node_buffer;
