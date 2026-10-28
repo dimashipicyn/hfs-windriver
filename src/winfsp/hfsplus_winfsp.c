@@ -6,6 +6,7 @@
 #ifdef _WIN32
 #include <stdio.h>
 #include <sddl.h>
+#include <shlobj.h>
 
 static PSECURITY_DESCRIPTOR g_default_sd = NULL;
 static ULONG g_default_sd_size = 0;
@@ -482,6 +483,23 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
         return -1;
     }
 
+    wchar_t raw_target[512] = {0};
+    wchar_t global_dev[64] = {0};
+    bool created_global_dos_device = false;
+
+    if (mount_point[1] == L':' && (mount_point[2] == L'\0' || (mount_point[2] == L'\\' && mount_point[3] == L'\0'))) {
+        wchar_t drive_letter[3] = { mount_point[0], L':', L'\0' };
+        if (QueryDosDeviceW(drive_letter, raw_target, sizeof(raw_target)/sizeof(wchar_t)) > 0) {
+            swprintf_s(global_dev, sizeof(global_dev)/sizeof(wchar_t), L"Global\\%ls", drive_letter);
+            if (DefineDosDeviceW(DDD_RAW_TARGET_PATH, global_dev, raw_target)) {
+                created_global_dos_device = true;
+                wprintf(L"[WinFsp] Published %ls globally to all Windows sessions.\n", drive_letter);
+            }
+        }
+        wchar_t root_path[4] = { mount_point[0], L':', L'\\', L'\0' };
+        SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATHW, root_path, NULL);
+    }
+
     status = FspFileSystemStartDispatcher(ctx->fsp, 1);
     if (!NT_SUCCESS(status)) {
         fwprintf(stderr, L"FspFileSystemStartDispatcher failed with status 0x%08X\n", (unsigned int)status);
@@ -501,13 +519,19 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
 
     wprintf(L"\n=======================================================\n");
     wprintf(L"  HFS+ volume successfully mounted at [%ls]!\n", mount_point);
-    wprintf(L"  Open Windows Explorer ('This PC') -> drive %ls\n", mount_point);
+    wprintf(L"  - Open Windows Explorer ('This PC') -> %ls\n", mount_point);
+    wprintf(L"  - In Command Prompt / PowerShell, verify with:  dir %ls\\\n", mount_point);
     wprintf(L"  Press Enter or Ctrl+C to unmount and exit.\n");
     wprintf(L"=======================================================\n\n");
 
     WaitForSingleObject(g_stop_event, INFINITE);
 
     wprintf(L"\nUnmounting volume [%ls]...\n", mount_point);
+    if (created_global_dos_device) {
+        DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_RAW_TARGET_PATH, global_dev, raw_target);
+        wchar_t root_path[4] = { mount_point[0], L':', L'\\', L'\0' };
+        SHChangeNotify(SHCNE_DRIVEREMOVED, SHCNF_PATHW, root_path, NULL);
+    }
     FspFileSystemStopDispatcher(ctx->fsp);
     FspFileSystemDelete(ctx->fsp);
     hfs_catalog_close(cat);
