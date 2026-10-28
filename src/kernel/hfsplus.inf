@@ -1,0 +1,54 @@
+;
+; HFS+ File System Driver for Windows 11
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "File system"
+ClassGuid   = {4d36e97b-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderString%
+DriverVer   = 10/28/2026,1.0.0.0
+CatalogFile = hfsplus.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12    ; %windir%\system32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+hfsplus.sys = 1,,
+
+[Manufacturer]
+%ManufacturerString% = Standard,NTamd64.10.0,NTarm64.10.0
+
+[Standard.NTamd64.10.0]
+%HfsPlusName% = HfsPlus_Install, HfsPlus
+
+[Standard.NTarm64.10.0]
+%HfsPlusName% = HfsPlus_Install, HfsPlus
+
+[HfsPlus_Install.NT]
+CopyFiles = HfsPlus_CopyFiles
+
+[HfsPlus_CopyFiles]
+hfsplus.sys
+
+[HfsPlus_Install.NT.Services]
+AddService = HfsPlus, 2, HfsPlus_Service_Install
+
+[HfsPlus_Service_Install]
+DisplayName    = %HfsPlusServiceDesc%
+ServiceType    = 2    ; SERVICE_FILE_SYSTEM_DRIVER
+StartType      = 3    ; SERVICE_DEMAND_START
+ErrorControl   = 1    ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\hfsplus.sys
+LoadOrderGroup = "File System"
+
+[Strings]
+ProviderString      = "OpenSource"
+ManufacturerString  = "HFS+ Project"
+DiskName            = "HFS+ Driver Installation Disk"
+HfsPlusName         = "HFS+ File System Driver"
+HfsPlusServiceDesc  = "HFS+ File System Driver Service"

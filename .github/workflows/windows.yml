@@ -1,0 +1,79 @@
+name: Build Windows 11 HFS+ Driver
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build on Windows (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, ARM64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install WinFsp
+        run: |
+          choco install winfsp -y
+
+      - name: Setup MSVC environment (${{ matrix.arch }})
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_TESTS=ON `
+            -DWINFSP_DIR="C:/Program Files (x86)/WinFsp"
+
+      - name: Build HFS+ Driver and Core Library
+        run: |
+          cmake --build build --config Release
+
+      - name: Run Unit Tests (x64 only)
+        if: matrix.arch == 'x64'
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package Artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist
+          Copy-Item build/hfsplus.exe dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath hfsplus-windows-${{ matrix.arch }}.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hfsplus-windows-${{ matrix.arch }}
+          path: hfsplus-windows-${{ matrix.arch }}.zip
+
+  build-macos:
+    name: Build & Test on macOS (Apple Silicon & Clang)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON -DBUILD_TESTS=ON
+
+      - name: Build
+        run: |
+          cmake --build build
+
+      - name: Run CTest with ASan & UBSan
+        run: |
+          ctest --test-dir build --output-on-failure
