@@ -47,6 +47,10 @@ typedef struct hfs_volume {
     bool is_hfsx;
     bool is_journaled;
     bool mounted_from_backup_header;
+
+    /* Partition bounds (for physical drives with GPT / MBR) */
+    uint64_t partition_offset;
+    uint64_t partition_size;
 } hfs_volume_t;
 
 /* Mount an HFS+ volume from an opened block device. Returns NULL if invalid volume. */
@@ -62,7 +66,7 @@ static inline int hfs_volume_read_block(hfs_volume_t* vol, uint32_t block_index,
 
 /* Calculate byte offset on the block device for a given allocation block index */
 static inline uint64_t hfs_volume_block_to_offset(const hfs_volume_t* vol, uint32_t block_index) {
-    return (uint64_t)block_index * (uint64_t)vol->block_size;
+    return vol->partition_offset + (uint64_t)block_index * (uint64_t)vol->block_size;
 }
 
 /* Close volume and free in-memory structure (does not close the underlying dev) */

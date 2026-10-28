@@ -49,7 +49,7 @@ int hfs_fork_read(hfs_volume_t* vol, const hfs_fork_t* fork, uint64_t offset, vo
         }
 
         if (found) {
-            uint64_t phys_offset = (uint64_t)phys_block * block_size + block_offset;
+            uint64_t phys_offset = hfs_volume_block_to_offset(vol, phys_block) + block_offset;
             if (hfs_block_device_read(vol->dev, phys_offset, dst + bytes_read, chunk) != 0) {
                 return -1;
             }
