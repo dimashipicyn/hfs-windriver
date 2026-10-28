@@ -230,10 +230,10 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     params.CasePreservedNames = 1;
     params.UnicodeOnDisk = 1;
 
-    /* Ensure the WinFsp kernel driver service is started */
+    /* Ensure the WinFsp kernel driver service is started if possible */
     FspFsctlStartService();
 
-    NTSTATUS status = FspFileSystemCreate((PWSTR)FSP_FSCTL_DISK_DEVICE_NAME, &params, &g_hfs_interface, &ctx->fsp);
+    NTSTATUS status = FspFileSystemCreate((PWSTR)L"" FSP_FSCTL_DISK_DEVICE_NAME, &params, &g_hfs_interface, &ctx->fsp);
     if (!NT_SUCCESS(status)) {
         fwprintf(stderr, L"FspFileSystemCreate failed with status 0x%08X\n", (unsigned int)status);
         if ((unsigned int)status == 0xC000000E) {
@@ -242,8 +242,8 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
             fwprintf(stderr, L"    1. If WinFsp is not installed, install it via Administrator terminal:\n");
             fwprintf(stderr, L"           winget install --id WinFsp.WinFsp\n");
             fwprintf(stderr, L"       or download MSI: https://github.com/winfsp/winfsp/releases\n");
-            fwprintf(stderr, L"    2. If already installed, ensure the driver is started:\n");
-            fwprintf(stderr, L"           sc start WinFsp\n");
+            fwprintf(stderr, L"    2. You can check WinFsp driver status with:\n");
+            fwprintf(stderr, L"           \"C:\\Program Files (x86)\\WinFsp\\bin\\fsptool-x64.exe\" lsdrv\n");
         }
         hfs_free(ctx);
         hfs_catalog_close(cat);
