@@ -177,6 +177,26 @@ static const FSP_FILE_SYSTEM_INTERFACE g_hfs_interface = {
     .ReadDirectory = ReadDirectory,
 };
 
+static HANDLE g_stop_event = NULL;
+
+static BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
+    (void)ctrl_type;
+    if (g_stop_event) {
+        SetEvent(g_stop_event);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static DWORD WINAPI wait_for_enter_thread(LPVOID param) {
+    (void)param;
+    getchar();
+    if (g_stop_event) {
+        SetEvent(g_stop_event);
+    }
+    return 0;
+}
+
 int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_point, bool debug_mode) {
     (void)debug_mode;
 
@@ -265,10 +285,48 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
         return -1;
     }
 
-    wprintf(L"Mounted HFS+ volume [%ls] at [%ls] (Read-Only)\n", device_or_image_path, mount_point);
     status = FspFileSystemStartDispatcher(ctx->fsp, 0);
+    if (!NT_SUCCESS(status)) {
+        fwprintf(stderr, L"FspFileSystemStartDispatcher failed with status 0x%08X\n", (unsigned int)status);
+        FspFileSystemDelete(ctx->fsp);
+        hfs_free(ctx);
+        hfs_catalog_close(cat);
+        hfs_volume_close(vol);
+        hfs_block_device_close(dev);
+        return -1;
+    }
 
-    return NT_SUCCESS(status) ? 0 : -1;
+    g_stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
+    HANDLE h_thread = CreateThread(NULL, 0, wait_for_enter_thread, NULL, 0, NULL);
+
+    wprintf(L"\n=======================================================\n");
+    wprintf(L"  HFS+ volume successfully mounted at [%ls]!\n", mount_point);
+    wprintf(L"  Open Windows Explorer ('This PC') -> drive %ls\n", mount_point);
+    wprintf(L"  Press Enter or Ctrl+C to unmount and exit.\n");
+    wprintf(L"=======================================================\n\n");
+
+    WaitForSingleObject(g_stop_event, INFINITE);
+
+    wprintf(L"\nUnmounting volume [%ls]...\n", mount_point);
+    FspFileSystemStopDispatcher(ctx->fsp);
+    FspFileSystemDelete(ctx->fsp);
+    hfs_catalog_close(cat);
+    hfs_volume_close(vol);
+    hfs_block_device_close(dev);
+    hfs_free(ctx);
+
+    if (h_thread) {
+        CloseHandle(h_thread);
+    }
+    if (g_stop_event) {
+        CloseHandle(g_stop_event);
+        g_stop_event = NULL;
+    }
+
+    wprintf(L"Volume unmounted successfully.\n");
+    return 0;
 }
 
 #endif /* _WIN32 */
