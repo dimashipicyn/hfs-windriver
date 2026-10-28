@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#if defined(_KERNEL_MODE) || defined(NTDDI_VERSION)
+#if defined(_KERNEL_MODE)
 #include <ntifs.h>
 #define HFS_POOL_TAG 'SFH+'
 
