@@ -237,9 +237,13 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     if (!NT_SUCCESS(status)) {
         fwprintf(stderr, L"FspFileSystemCreate failed with status 0x%08X\n", (unsigned int)status);
         if ((unsigned int)status == 0xC000000E) {
-            fwprintf(stderr, L"--> [WinFsp Service Not Running]: The WinFsp kernel driver is not active.\n");
-            fwprintf(stderr, L"    Please start the service by running in Administrator Command Prompt:\n");
-            fwprintf(stderr, L"        net start winfsp\n");
+            fwprintf(stderr, L"--> [WinFsp Kernel Driver Not Installed or Running]:\n");
+            fwprintf(stderr, L"    The WinFsp core file system driver is required to mount volumes.\n");
+            fwprintf(stderr, L"    1. If WinFsp is not installed, install it via Administrator terminal:\n");
+            fwprintf(stderr, L"           winget install --id WinFsp.WinFsp\n");
+            fwprintf(stderr, L"       or download MSI: https://github.com/winfsp/winfsp/releases\n");
+            fwprintf(stderr, L"    2. If already installed, ensure the driver is started:\n");
+            fwprintf(stderr, L"           sc start WinFsp\n");
         }
         hfs_free(ctx);
         hfs_catalog_close(cat);
