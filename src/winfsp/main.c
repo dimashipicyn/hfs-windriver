@@ -19,6 +19,9 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
 #ifdef _WIN32
     if (!NT_SUCCESS(FspLoad(0))) {
         fprintf(stderr, "Error: Failed to load WinFsp runtime DLL (winfsp-x64.dll).\n");

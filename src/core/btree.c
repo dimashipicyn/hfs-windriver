@@ -194,7 +194,9 @@ int hfs_btree_search(hfs_btree_t* btree, const void* search_key,
                 }
             }
 
-            /* Not found in leaf */
+            /* Not exact match in leaf, but record insertion/start position */
+            if (out_leaf_node) *out_leaf_node = current_node;
+            if (out_record_idx) *out_record_idx = (uint16_t)low;
             return -1;
         } else {
             /* Unexpected node kind */

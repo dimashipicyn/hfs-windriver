@@ -215,6 +215,7 @@ static int on_winfsp_dir_entry(const hfs_dirent_t* entry, void* user_data) {
         return 1; /* Buffer full or error */
     }
 
+    wprintf(L"  [+] %ls (%ls, size=%llu)\n", wname, entry->is_directory ? L"DIR" : L"FILE", (unsigned long long)entry->size);
     dctx->count++;
     return 0;
 }
@@ -233,24 +234,27 @@ static NTSTATUS ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext,
 
     NTSTATUS dir_result = STATUS_SUCCESS;
     if (FspFileSystemAcquireDirectoryBuffer(&fctx->dir_buffer, 0 == Marker, &dir_result)) {
-        /* Add "." */
-        UINT8 dot_buf[sizeof(FSP_FSCTL_DIR_INFO) + 2 * sizeof(wchar_t)];
-        FSP_FSCTL_DIR_INFO* dot_info = (FSP_FSCTL_DIR_INFO*)dot_buf;
-        memset(dot_info, 0, sizeof(*dot_info));
-        fill_file_info(ctx->vol, &fctx->dirent, &dot_info->FileInfo);
-        dot_info->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + 1 * sizeof(wchar_t));
-        dot_info->FileNameBuf[0] = L'.';
-        FspFileSystemFillDirectoryBuffer(&fctx->dir_buffer, dot_info, &dir_result);
+        /* ONLY add "." and ".." if this is NOT the root folder! */
+        if (fctx->dirent.cnid != kHFSRootFolderID) {
+            /* Add "." */
+            UINT8 dot_buf[sizeof(FSP_FSCTL_DIR_INFO) + 2 * sizeof(wchar_t)];
+            FSP_FSCTL_DIR_INFO* dot_info = (FSP_FSCTL_DIR_INFO*)dot_buf;
+            memset(dot_info, 0, sizeof(*dot_info));
+            fill_file_info(ctx->vol, &fctx->dirent, &dot_info->FileInfo);
+            dot_info->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + 1 * sizeof(wchar_t));
+            dot_info->FileNameBuf[0] = L'.';
+            FspFileSystemFillDirectoryBuffer(&fctx->dir_buffer, dot_info, &dir_result);
 
-        /* Add ".." */
-        UINT8 dotdot_buf[sizeof(FSP_FSCTL_DIR_INFO) + 3 * sizeof(wchar_t)];
-        FSP_FSCTL_DIR_INFO* dotdot_info = (FSP_FSCTL_DIR_INFO*)dotdot_buf;
-        memset(dotdot_info, 0, sizeof(*dotdot_info));
-        fill_file_info(ctx->vol, &fctx->dirent, &dotdot_info->FileInfo);
-        dotdot_info->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + 2 * sizeof(wchar_t));
-        dotdot_info->FileNameBuf[0] = L'.';
-        dotdot_info->FileNameBuf[1] = L'.';
-        FspFileSystemFillDirectoryBuffer(&fctx->dir_buffer, dotdot_info, &dir_result);
+            /* Add ".." */
+            UINT8 dotdot_buf[sizeof(FSP_FSCTL_DIR_INFO) + 3 * sizeof(wchar_t)];
+            FSP_FSCTL_DIR_INFO* dotdot_info = (FSP_FSCTL_DIR_INFO*)dotdot_buf;
+            memset(dotdot_info, 0, sizeof(*dotdot_info));
+            fill_file_info(ctx->vol, &fctx->dirent, &dotdot_info->FileInfo);
+            dotdot_info->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + 2 * sizeof(wchar_t));
+            dotdot_info->FileNameBuf[0] = L'.';
+            dotdot_info->FileNameBuf[1] = L'.';
+            FspFileSystemFillDirectoryBuffer(&fctx->dir_buffer, dotdot_info, &dir_result);
+        }
 
         /* Enumerate directory entries from HFS+ catalog */
         dir_fill_ctx_t dctx = {
