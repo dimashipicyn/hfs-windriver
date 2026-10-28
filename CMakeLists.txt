@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 project(hfsplus_windriver LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD_REQUIRED OFF)
 
 option(ENABLE_ASAN "Enable AddressSanitizer and UBSan in Debug builds" ON)
 option(BUILD_TESTS "Build test suite" ON)

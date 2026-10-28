@@ -14,7 +14,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [x64, ARM64]
+        include:
+          - platform: x64
+            arch: amd64
+          - platform: ARM64
+            arch: amd64_arm64
 
     steps:
       - name: Checkout repository
@@ -24,9 +28,14 @@ jobs:
         shell: pwsh
         run: choco install winfsp -y
 
+      - name: Setup MSVC environment (${{ matrix.platform }})
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
       - name: Configure CMake (${{ matrix.platform }})
         shell: pwsh
-        run: cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.platform }} -DBUILD_TESTS=ON -DWINFSP_DIR="C:/Program Files (x86)/WinFsp"
+        run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DWINFSP_DIR="C:/Program Files (x86)/WinFsp"
 
       - name: Build HFS+ Driver and Core Library
         shell: pwsh
@@ -41,7 +50,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force
-          Copy-Item build/Release/hfsplus.exe dist/
+          Copy-Item build/hfsplus.exe dist/
           Copy-Item README.md dist/
           Compress-Archive -Path dist/* -DestinationPath hfsplus-windows-${{ matrix.platform }}.zip
 
