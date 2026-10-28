@@ -1,6 +1,7 @@
 #include "hfsplus/volume.h"
 #include "hfsplus/hfsplus_endian.h"
 #include "hfsplus/mem.h"
+#include <stdio.h>
 #include <string.h>
 
 #pragma pack(push, 1)
@@ -117,6 +118,8 @@ static bool scan_gpt_partitions(hfs_block_device_t* dev, hfs_volume_t* vol) {
         return false;
     }
 
+    printf("  [GPT] Detected GUID Partition Table\n");
+
     uint64_t entry_lba = gpt.partition_entry_lba;
     uint32_t num_entries = gpt.num_partition_entries;
     uint32_t entry_size = gpt.sizeof_partition_entry;
@@ -139,10 +142,15 @@ static bool scan_gpt_partitions(hfs_block_device_t* dev, hfs_volume_t* vol) {
         uint64_t part_offset = entry->starting_lba * 512;
         uint64_t part_size = (entry->ending_lba - entry->starting_lba + 1) * 512;
 
+        printf("  [GPT] Partition %u: LBA %llu..%llu (%llu MB)\n",
+               i + 1, (unsigned long long)entry->starting_lba, (unsigned long long)entry->ending_lba,
+               (unsigned long long)(part_size / (1024 * 1024)));
+
         /* Check if GUID matches Apple HFS+ or if volume header is present at partition offset */
         if (memcmp(entry->type_guid, kAppleHFSPlusGUID, 16) == 0 ||
             probe_hfs_at_offset(dev, part_offset, vol)) {
             if (probe_hfs_at_offset(dev, part_offset, vol)) {
+                printf("  [HFS+] Found valid HFS+ Volume Header on Partition %u!\n", i + 1);
                 vol->partition_size = part_size;
                 return true;
             }
@@ -162,6 +170,7 @@ static bool scan_mbr_partitions(hfs_block_device_t* dev, hfs_volume_t* vol) {
         return false;
     }
 
+    bool found_any = false;
     for (int i = 0; i < 4; i++) {
         const uint8_t* entry = sector0 + 446 + i * 16;
         uint8_t part_type = entry[4];
@@ -173,8 +182,16 @@ static bool scan_mbr_partitions(hfs_block_device_t* dev, hfs_volume_t* vol) {
                                ((uint32_t)entry[14] << 16) | ((uint32_t)entry[15] << 24);
 
         if (start_lba > 0) {
+            if (!found_any) {
+                printf("  [MBR] Detected Master Boot Record\n");
+                found_any = true;
+            }
             uint64_t part_offset = (uint64_t)start_lba * 512;
+            printf("  [MBR] Partition %d (Type 0x%02X): LBA %u..%u\n",
+                   i + 1, part_type, start_lba, start_lba + sector_count);
+
             if (probe_hfs_at_offset(dev, part_offset, vol)) {
+                printf("  [HFS+] Found valid HFS+ Volume Header on MBR Partition %d!\n", i + 1);
                 vol->partition_size = (uint64_t)sector_count * 512;
                 return true;
             }

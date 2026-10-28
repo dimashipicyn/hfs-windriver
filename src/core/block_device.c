@@ -16,17 +16,34 @@ typedef struct {
 static int win32_read(hfs_block_device_t* dev, uint64_t offset, void* buffer, size_t count) {
     win32_block_dev_t* wdev = (win32_block_dev_t*)dev->backend_data;
     if (!wdev || wdev->handle == INVALID_HANDLE_VALUE) return -1;
+    if (count == 0) return 0;
+
+    uint32_t sector_size = dev->sector_size ? dev->sector_size : 512;
+
+    /* Align offset and count to sector size boundaries for raw physical disk handles */
+    uint64_t start_aligned = (offset / sector_size) * sector_size;
+    uint64_t end_aligned = ((offset + count + sector_size - 1) / sector_size) * sector_size;
+    size_t total_aligned = (size_t)(end_aligned - start_aligned);
+
+    uint8_t* bounce = (uint8_t*)hfs_alloc(total_aligned);
+    if (!bounce) return -1;
 
     LARGE_INTEGER li;
-    li.QuadPart = (LONGLONG)offset;
+    li.QuadPart = (LONGLONG)start_aligned;
     if (!SetFilePointerEx(wdev->handle, li, NULL, FILE_BEGIN)) {
+        hfs_free(bounce);
         return -1;
     }
 
     DWORD bytes_read = 0;
-    if (!ReadFile(wdev->handle, buffer, (DWORD)count, &bytes_read, NULL) || bytes_read != count) {
+    if (!ReadFile(wdev->handle, bounce, (DWORD)total_aligned, &bytes_read, NULL) || bytes_read != total_aligned) {
+        hfs_free(bounce);
         return -1;
     }
+
+    size_t lead_in = (size_t)(offset - start_aligned);
+    memcpy(buffer, bounce + lead_in, count);
+    hfs_free(bounce);
 
     return 0;
 }
@@ -59,26 +76,38 @@ hfs_block_device_t* hfs_block_device_open_win32(const wchar_t* path) {
         return NULL;
     }
 
+    /* Allow raw DASD disk access */
+    DWORD dummy = 0;
+    DeviceIoControl(h, FSCTL_ALLOW_EXTENDED_DASD_IO, NULL, 0, NULL, 0, &dummy, NULL);
+
+    uint32_t sector_size = 512;
     uint64_t total_size = 0;
-    LARGE_INTEGER size;
-    if (GetFileSizeEx(h, &size)) {
-        total_size = (uint64_t)size.QuadPart;
-    } else {
-        /* Physical disks / raw volumes do not support GetFileSizeEx - query via IOCTL */
-        GET_LENGTH_INFORMATION length_info;
-        DWORD bytes_ret = 0;
-        if (DeviceIoControl(h, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
-                            &length_info, sizeof(length_info), &bytes_ret, NULL)) {
-            total_size = (uint64_t)length_info.Length.QuadPart;
+
+    /* Query disk geometry for sector size */
+    DISK_GEOMETRY_EX geom;
+    if (DeviceIoControl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
+                        &geom, sizeof(geom), &dummy, NULL)) {
+        if (geom.Geometry.BytesPerSector > 0) {
+            sector_size = geom.Geometry.BytesPerSector;
+        }
+        total_size = (uint64_t)geom.DiskSize.QuadPart;
+    }
+
+    /* Query precise length if available */
+    GET_LENGTH_INFORMATION length_info;
+    if (DeviceIoControl(h, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
+                        &length_info, sizeof(length_info), &dummy, NULL)) {
+        total_size = (uint64_t)length_info.Length.QuadPart;
+    }
+
+    /* If IOCTLs failed (e.g. regular file / .dmg), fallback to GetFileSizeEx */
+    if (total_size == 0) {
+        LARGE_INTEGER size;
+        if (GetFileSizeEx(h, &size)) {
+            total_size = (uint64_t)size.QuadPart;
         } else {
-            DISK_GEOMETRY_EX geom;
-            if (DeviceIoControl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
-                                &geom, sizeof(geom), &bytes_ret, NULL)) {
-                total_size = (uint64_t)geom.DiskSize.QuadPart;
-            } else {
-                CloseHandle(h);
-                return NULL;
-            }
+            CloseHandle(h);
+            return NULL;
         }
     }
 
@@ -92,11 +121,11 @@ hfs_block_device_t* hfs_block_device_open_win32(const wchar_t* path) {
     }
 
     wdev->handle = h;
-    wdev->is_device = false;
+    wdev->is_device = true;
 
     dev->ops = &g_win32_ops;
     dev->backend_data = wdev;
-    dev->sector_size = 512;
+    dev->sector_size = sector_size;
     dev->total_size = total_size;
 
     return dev;
