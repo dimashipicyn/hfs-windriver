@@ -43,6 +43,9 @@ jobs:
           New-Item -ItemType Directory -Path dist -Force
           Copy-Item build/hfsplus.exe dist/
           Copy-Item README.md dist/
+          if (Test-Path "C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll") {
+            Copy-Item "C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll" dist/
+          }
           Compress-Archive -Path dist/* -DestinationPath hfsplus-windows-x64.zip
 
       - name: Upload Artifact

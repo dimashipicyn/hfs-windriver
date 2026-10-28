@@ -19,6 +19,14 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
+#ifdef _WIN32
+    if (!NT_SUCCESS(FspLoad(0))) {
+        fprintf(stderr, "Error: Failed to load WinFsp runtime DLL (winfsp-x64.dll).\n");
+        fprintf(stderr, "Please ensure WinFsp is installed from https://winfsp.dev/\n");
+        return 1;
+    }
+#endif
+
     int wargc = 0;
     LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
     if (!wargv) {
