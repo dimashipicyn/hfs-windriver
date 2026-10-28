@@ -36,7 +36,7 @@ static void test_endian_and_time(void) {
 static void test_synthetic_volume_mount(void) {
     printf("[TEST] Testing synthetic volume mount and backup header...\n");
 
-    const char* tmp_file = "/tmp/test_hfs_synth.bin";
+    const char* tmp_file = "test_hfs_synth.bin";
     const size_t total_size = 1024 * 1024; /* 1MB */
 
     uint8_t* buffer = (uint8_t*)calloc(1, total_size);

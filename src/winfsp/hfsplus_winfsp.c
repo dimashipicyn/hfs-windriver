@@ -6,14 +6,6 @@
 #ifdef _WIN32
 #include <stdio.h>
 
-#define STATUS_SUCCESS                   ((NTSTATUS)0x00000000L)
-#define STATUS_OBJECT_NAME_NOT_FOUND     ((NTSTATUS)0xC0000034L)
-#define STATUS_OBJECT_PATH_NOT_FOUND     ((NTSTATUS)0xC000003AL)
-#define STATUS_ACCESS_DENIED             ((NTSTATUS)0xC0000022L)
-#define STATUS_MEDIA_WRITE_PROTECTED     ((NTSTATUS)0xC00000A2L)
-#define STATUS_INSUFFICIENT_RESOURCES    ((NTSTATUS)0xC000009AL)
-#define STATUS_END_OF_FILE               ((NTSTATUS)0xC0000011L)
-
 static void convert_wchar_to_utf8(PWSTR wstr, char* utf8, size_t max_bytes) {
     if (!wstr || !utf8 || max_bytes == 0) return;
     WideCharToMultiByte(CP_UTF8, 0, wstr, -1, utf8, (int)max_bytes, NULL, NULL);
@@ -47,11 +39,7 @@ static NTSTATUS GetVolumeInfo(FSP_FILE_SYSTEM* FileSystem, FSP_FSCTL_VOLUME_INFO
     VolumeInfo->FreeSize = (UINT64)vol->free_blocks * (UINT64)vol->block_size;
 
     const wchar_t* label = vol->is_hfsx ? L"Mac HFSX" : L"Mac HFS+";
-    size_t label_len = wcslen(label);
-    if (label_len > sizeof(VolumeInfo->VolumeLabel) / sizeof(wchar_t) - 1) {
-        label_len = sizeof(VolumeInfo->VolumeLabel) / sizeof(wchar_t) - 1;
-    }
-    wcsncpy_s(VolumeInfo->VolumeLabel, sizeof(VolumeInfo->VolumeLabel)/sizeof(wchar_t), label, label_len);
+    wcsncpy_s(VolumeInfo->VolumeLabel, sizeof(VolumeInfo->VolumeLabel)/sizeof(wchar_t), label, _TRUNCATE);
 
     return STATUS_SUCCESS;
 }
@@ -125,9 +113,8 @@ static NTSTATUS GetFileInfo(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext, FSP_
 typedef struct {
     FSP_FILE_SYSTEM* FileSystem;
     PVOID Buffer;
-    UINT32 Length;
-    PUINT32 PBytesTransferred;
-    NTSTATUS Status;
+    ULONG Length;
+    PULONG PBytesTransferred;
 } dir_fill_ctx_t;
 
 static int on_winfsp_dir_entry(const hfs_dirent_t* entry, void* user_data) {
@@ -146,7 +133,7 @@ static int on_winfsp_dir_entry(const hfs_dirent_t* entry, void* user_data) {
     dir_info->Size = (UINT16)(sizeof(FSP_FSCTL_DIR_INFO) + wcslen(wname) * sizeof(wchar_t));
     wcscpy_s((wchar_t*)dir_info->FileNameBuf, sizeof(wname)/sizeof(wchar_t), wname);
 
-    if (!FspFileSystemAddDirInfo(dir_info, &dctx->Buffer, &dctx->Length, dctx->PBytesTransferred)) {
+    if (!FspFileSystemAddDirInfo(dir_info, dctx->Buffer, dctx->Length, dctx->PBytesTransferred)) {
         return 1; /* Buffer full, stop iteration */
     }
 
@@ -169,16 +156,19 @@ static NTSTATUS ReadDirectory(FSP_FILE_SYSTEM* FileSystem, PVOID FileContext,
     dir_fill_ctx_t dctx = {
         .FileSystem = FileSystem,
         .Buffer = Buffer,
-        .Length = Length,
-        .PBytesTransferred = PBytesTransferred,
-        .Status = STATUS_SUCCESS
+        .Length = (ULONG)Length,
+        .PBytesTransferred = (PULONG)PBytesTransferred,
     };
 
     hfs_catalog_iterate_dir(ctx->cat, fctx->dirent.cnid, on_winfsp_dir_entry, &dctx);
+
+    /* Signal EOF marker for directory listing */
+    FspFileSystemAddDirInfo(NULL, Buffer, (ULONG)Length, (PULONG)PBytesTransferred);
+
     return STATUS_SUCCESS;
 }
 
-static FSP_FILE_SYSTEM_INTERFACE g_hfs_interface = {
+static const FSP_FILE_SYSTEM_INTERFACE g_hfs_interface = {
     .GetVolumeInfo = GetVolumeInfo,
     .Open = Open,
     .Close = Close,
@@ -188,6 +178,8 @@ static FSP_FILE_SYSTEM_INTERFACE g_hfs_interface = {
 };
 
 int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_point, bool debug_mode) {
+    (void)debug_mode;
+
     hfs_block_device_t* dev = hfs_block_device_open_win32(device_or_image_path);
     if (!dev) {
         fwprintf(stderr, L"Failed to open device: %ls\n", device_or_image_path);
@@ -210,6 +202,13 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     }
 
     hfs_winfsp_context_t* ctx = (hfs_winfsp_context_t*)hfs_zalloc(sizeof(hfs_winfsp_context_t));
+    if (!ctx) {
+        hfs_catalog_close(cat);
+        hfs_volume_close(vol);
+        hfs_block_device_close(dev);
+        return -1;
+    }
+
     ctx->dev = dev;
     ctx->vol = vol;
     ctx->cat = cat;
@@ -225,9 +224,13 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
     params.CasePreservedNames = 1;
     params.UnicodeOnDisk = 1;
 
-    NTSTATUS status = FspFileSystemCreate((PWSTR)L"\\Device\\HfsPlus", &params, &g_hfs_interface, &ctx->fsp);
+    NTSTATUS status = FspFileSystemCreate((PWSTR)FSP_FSCTL_DISK_DEVICE_NAME, &params, &g_hfs_interface, &ctx->fsp);
     if (!NT_SUCCESS(status)) {
-        fwprintf(stderr, L"FspFileSystemCreate failed with status 0x%08X\n", status);
+        fwprintf(stderr, L"FspFileSystemCreate failed with status 0x%08X\n", (unsigned int)status);
+        hfs_free(ctx);
+        hfs_catalog_close(cat);
+        hfs_volume_close(vol);
+        hfs_block_device_close(dev);
         return -1;
     }
 
@@ -235,8 +238,12 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
 
     status = FspFileSystemSetMountPoint(ctx->fsp, (PWSTR)mount_point);
     if (!NT_SUCCESS(status)) {
-        fwprintf(stderr, L"FspFileSystemSetMountPoint failed with status 0x%08X\n", status);
+        fwprintf(stderr, L"FspFileSystemSetMountPoint failed with status 0x%08X\n", (unsigned int)status);
         FspFileSystemDelete(ctx->fsp);
+        hfs_free(ctx);
+        hfs_catalog_close(cat);
+        hfs_volume_close(vol);
+        hfs_block_device_close(dev);
         return -1;
     }
 

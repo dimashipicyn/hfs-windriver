@@ -84,9 +84,16 @@ hfs_block_device_t* hfs_block_device_open_win32(const wchar_t* path) {
     return dev;
 }
 
-#endif /* _WIN32 */
+hfs_block_device_t* hfs_block_device_open_file(const char* path) {
+    if (!path) return NULL;
+    wchar_t wpath[MAX_PATH];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH) == 0) {
+        return NULL;
+    }
+    return hfs_block_device_open_win32(wpath);
+}
 
-#if !defined(_KERNEL_MODE)
+#elif !defined(_KERNEL_MODE)
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -109,7 +116,6 @@ static int posix_read(hfs_block_device_t* dev, uint64_t offset, void* buffer, si
             return -1;
         }
         if (res == 0) {
-            /* EOF reached before requested count */
             return -1;
         }
         total_read += (size_t)res;
@@ -169,7 +175,7 @@ hfs_block_device_t* hfs_block_device_open_file(const char* path) {
     return dev;
 }
 
-#endif /* !_KERNEL_MODE */
+#endif /* !_WIN32 && !_KERNEL_MODE */
 
 void hfs_block_device_close(hfs_block_device_t* dev) {
     if (!dev) return;

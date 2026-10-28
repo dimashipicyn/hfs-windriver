@@ -14,7 +14,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         add_link_options(-fsanitize=address,undefined)
     endif()
 elseif(MSVC)
-    add_compile_options(/W4 /permissive-)
+    add_compile_options(/W4 /utf-8)
 endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -46,7 +46,7 @@ if(WIN32)
     )
 
     find_library(WINFSP_LIBRARY
-        NAMES winfsp-x64 winfsp-aarch64 winfsp-x86
+        NAMES winfsp-x64 winfsp-a64 winfsp-x86 winfsp-aarch64 winfsp-arm64
         PATHS ${WINFSP_SEARCH_PATHS}
         PATH_SUFFIXES lib
     )

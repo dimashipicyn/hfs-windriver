@@ -5,7 +5,6 @@
 #include "hfsplus/catalog.h"
 
 #ifdef _WIN32
-#include <windows.h>
 #include <winfsp/winfsp.h>
 
 typedef struct hfs_winfsp_context {

@@ -4,6 +4,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 
 static void print_usage(const wchar_t* prog) {
     wprintf(L"HFS+ Driver for Windows 11 (WinFsp)\n");
@@ -14,31 +15,45 @@ static void print_usage(const wchar_t* prog) {
     wprintf(L"  %ls -v C:\\Images\\MacOS_Disk.dmg -m M:\n", prog);
 }
 
-int wmain(int argc, wchar_t* argv[]) {
+int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) {
+        fprintf(stderr, "Failed to parse command line arguments.\n");
+        return 1;
+    }
+
     const wchar_t* device_path = NULL;
     const wchar_t* mount_point = NULL;
     bool debug_mode = false;
 
-    for (int i = 1; i < argc; i++) {
-        if ((wcscmp(argv[i], L"-v") == 0 || wcscmp(argv[i], L"-i") == 0) && i + 1 < argc) {
-            device_path = argv[++i];
-        } else if (wcscmp(argv[i], L"-m") == 0 && i + 1 < argc) {
-            mount_point = argv[++i];
-        } else if (wcscmp(argv[i], L"-d") == 0) {
+    for (int i = 1; i < wargc; i++) {
+        if ((wcscmp(wargv[i], L"-v") == 0 || wcscmp(wargv[i], L"-i") == 0) && i + 1 < wargc) {
+            device_path = wargv[++i];
+        } else if (wcscmp(wargv[i], L"-m") == 0 && i + 1 < wargc) {
+            mount_point = wargv[++i];
+        } else if (wcscmp(wargv[i], L"-d") == 0) {
             debug_mode = true;
-        } else if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--help") == 0) {
-            print_usage(argv[0]);
+        } else if (wcscmp(wargv[i], L"-h") == 0 || wcscmp(wargv[i], L"--help") == 0) {
+            print_usage(wargv[0]);
+            LocalFree(wargv);
             return 0;
         }
     }
 
     if (!device_path || !mount_point) {
-        print_usage(argv[0]);
+        print_usage(wargv[0]);
+        LocalFree(wargv);
         return 1;
     }
 
     wprintf(L"Initializing HFS+ WinFsp Driver...\n");
-    return hfs_winfsp_mount(device_path, mount_point, debug_mode);
+    int res = hfs_winfsp_mount(device_path, mount_point, debug_mode);
+    LocalFree(wargv);
+    return res;
 }
 
 #else
