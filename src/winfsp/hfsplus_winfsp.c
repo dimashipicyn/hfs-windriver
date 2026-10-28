@@ -182,7 +182,13 @@ int hfs_winfsp_mount(const wchar_t* device_or_image_path, const wchar_t* mount_p
 
     hfs_block_device_t* dev = hfs_block_device_open_win32(device_or_image_path);
     if (!dev) {
-        fwprintf(stderr, L"Failed to open device: %ls\n", device_or_image_path);
+        DWORD err = GetLastError();
+        fwprintf(stderr, L"Failed to open device: %ls (Error Code: %lu)\n", device_or_image_path, err);
+        if (err == ERROR_ACCESS_DENIED) {
+            fwprintf(stderr, L"--> [ACCESS DENIED]: You MUST run Command Prompt or PowerShell AS ADMINISTRATOR to access raw physical disks.\n");
+        } else if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) {
+            fwprintf(stderr, L"--> [NOT FOUND]: Device path not found. Check Disk Management (e.g. \\\\.\\PhysicalDrive3).\n");
+        }
         return -1;
     }
 

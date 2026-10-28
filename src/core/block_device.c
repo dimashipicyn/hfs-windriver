@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <winioctl.h>
 
 typedef struct {
     HANDLE handle;
@@ -53,15 +54,32 @@ static const hfs_block_device_ops_t g_win32_ops = {
 
 hfs_block_device_t* hfs_block_device_open_win32(const wchar_t* path) {
     HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+                           OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         return NULL;
     }
 
+    uint64_t total_size = 0;
     LARGE_INTEGER size;
-    if (!GetFileSizeEx(h, &size)) {
-        CloseHandle(h);
-        return NULL;
+    if (GetFileSizeEx(h, &size)) {
+        total_size = (uint64_t)size.QuadPart;
+    } else {
+        /* Physical disks / raw volumes do not support GetFileSizeEx - query via IOCTL */
+        GET_LENGTH_INFORMATION length_info;
+        DWORD bytes_ret = 0;
+        if (DeviceIoControl(h, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
+                            &length_info, sizeof(length_info), &bytes_ret, NULL)) {
+            total_size = (uint64_t)length_info.Length.QuadPart;
+        } else {
+            DISK_GEOMETRY_EX geom;
+            if (DeviceIoControl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
+                                &geom, sizeof(geom), &bytes_ret, NULL)) {
+                total_size = (uint64_t)geom.DiskSize.QuadPart;
+            } else {
+                CloseHandle(h);
+                return NULL;
+            }
+        }
     }
 
     hfs_block_device_t* dev = (hfs_block_device_t*)hfs_zalloc(sizeof(hfs_block_device_t));
@@ -79,7 +97,7 @@ hfs_block_device_t* hfs_block_device_open_win32(const wchar_t* path) {
     dev->ops = &g_win32_ops;
     dev->backend_data = wdev;
     dev->sector_size = 512;
-    dev->total_size = (uint64_t)size.QuadPart;
+    dev->total_size = total_size;
 
     return dev;
 }
